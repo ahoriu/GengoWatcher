@@ -1,307 +1,227 @@
-# GengoWatcher v2.2.0
+# GengoWatcher
 
-GengoWatcher is an intelligent terminal application designed to find and alert you to new freelance jobs the instant they become available. It monitors both your personal Gengo RSS feed and a real-time WebSocket connection, ensuring maximum notification speed.
+> **Latest release: v2.9.4** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
 
-It features an interactive text-based user interface (TUI) that runs directly in your terminal, providing real-time status updates, activity logs, and command controls.
+A terminal-based monitor for Gengo translation jobs with real-time notifications,
+browser-collected workbench observation, and an optional local web API for
+handoff and integration.
 
----
+## Features
 
-## ✨ Key Features
+- **Real-time monitoring** via WebSocket and RSS feed
+- **Desktop notifications** with sound alerts
+- **Auto-accept jobs** matching your criteria
+- **Multiple sources** — WebSocket, RSS, email, native browser (Firefox RDP), and website scraping
+- **Native browser workbench observation** — watches your real Firefox session via DevTools, projects order/text/time-left/segment counts into state, and fires countdown alerts at 50% / 1h / low-time
+- **Webhook-backed API events** — signed inbound job discovery, signed outbound delivery with retry/backoff, JSONL audit log
+- **CAPTCHA solving** integration (2Captcha, Anti-Captcha)
+- **Modern TUI** built with Textual, with browser / audit / telemetry tabs
+- **Local web API** with bearer auth for file transfer, status, and webhook ingest
 
-- **Dual-Source Monitoring**: Fetches jobs from both a personal RSS feed (as a fallback) and a real-time WebSocket connection.
-- **Highly Efficient**: Near-zero CPU usage when idle, ensuring it runs quietly in the background without impacting system performance.
-- **Responsive Interactive TUI**: A clean, modern interface that provides at-a-glance status, feels responsive to user input, and includes command controls.
-- **Interactive Diagnostics**: A `wstest` command allows you to test WebSocket connectivity and the full notification pipeline on demand.
-- **Customizable Alerts**:
-    - Filter jobs by a minimum reward value.
-    - Toggle desktop and sound alerts on/off.
-- **Auto Job Acceptance**: Automatically accept jobs that meet your criteria with configurable delays and CAPTCHA solving integration.
-- **CAPTCHA Solving Integration**: Automated solving for job acceptance using 2Captcha, Anti-Captcha, or local ML-based solver.
-- **Interactive Controls**: Pause, resume, restart, and trigger manual checks on the fly.
-- **Robust & Resilient**: Handles connection errors with an exponential backoff strategy and runs correctly even in non-interactive terminals.
-- **Persistent State**: Remembers the last job seen in `state.json`, so you only get notified about truly new entries.
-- **CSV Logging**: Optionally logs every job entry to a CSV file for historical data analysis.
-- **Web Interface**: Optional web-based monitoring interface with real-time job tracking.
-
----
-
-![GengoWatcher TUI Screenshot](assets/tui-screenshot.png)
-
----
-
-## 📋 Table of Contents
-
-- [✨ Key Features](#-key-features)
-- [🚀 Installation](#-installation)
-- [⚙️ Usage](#️-usage)
-  - [📝 Example `config.ini`](#-example-configini)
-- [🤖 Auto Job Acceptance](#-auto-job-acceptance)
-- [🔐 CAPTCHA Solver Setup](#-captcha-solver-setup)
-- [⌨️ Commands](#️-commands)
-- [🐛 Troubleshooting](#-troubleshooting)
-- [📜 License](#-license)
-
----
-
-## 🚀 Installation
-
-GengoWatcher is a Python application requiring Python 3.8 or newer.
-
-**1. Clone the Repository**
+## Installation
 
 ```bash
 git clone https://github.com/tdawe1/GengoWatcher.git
 cd GengoWatcher
-```
-
-**2. Set Up a Virtual Environment (Highly Recommended)**
-
-Using a virtual environment keeps project dependencies isolated from your system's global Python installation.
-
-```bash
-# Create a virtual environment
+git checkout v2.9.4  # or stay on main for the latest unreleased changes
 python -m venv venv
-
-# Activate it
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -e .
 ```
 
-**3. Install Dependencies**
+That installs `gengowatcher` on your PATH, plus the release-friendly aliases
+`gengo-watcher` and `gengowatcher-browser-worker`.
+
+If you want a simpler repo-local launcher without relying on Python packaging, install the bundled script into `~/.local/bin`:
 
 ```bash
-pip install -r requirements.txt
+make install-user
 ```
 
----
+That symlinks `bin/gengowatcher`,
+`bin/gengo-watcher`, and
+`bin/gengowatcher-browser-worker`
+into `~/.local/bin/` and runs them through this repo's `venv` from any directory.
 
-## ⚙️ Usage
-
-**1. Launch the Application**
-
-From your terminal, run:
+## Quick Start
 
 ```bash
-python -m gengowatcher.main
+gengowatcher
 ```
 
-**Optional Command-Line Arguments:**
+Alias:
 
-- `--web` - Run TUI with web server enabled (default port: 8000)
-- `--web-only` - Run web server only (no TUI)
-- `--web-port PORT` - Specify web server port
-- `--configure` - Run interactive configuration setup
-- `--set SECTION OPTION VALUE` - Set config value via CLI
-- `--get SECTION OPTION` - Get config value via CLI
-- `--list` - List all configuration values
+```bash
+gengo-watcher
+```
 
-**2. First-Time Setup**
+Or directly:
 
-The first time you run GengoWatcher, it will detect that it's a new installation and guide you through an interactive setup. It will ask for essential details needed for WebSocket and RSS monitoring.
+```bash
+./bin/gengowatcher
+```
 
-**3. Start Monitoring**
+On the first run, you'll be guided through configuration setup.
 
-After you complete the prompts, the application will automatically save your details to `config.ini` and begin monitoring for jobs.
+Interactive setup entrypoints:
 
----
+```bash
+gengowatcher --configure
+gengowatcher --setup-email
+gengowatcher --setup-website
+```
 
-### 📝 Example `config.ini`
+Web-only mode (no TUI):
 
-The interactive setup will create a `config.ini` file for you. You can edit this file later to fine-tune your settings. It will look similar to this:
+```bash
+gengowatcher --web-only
+gengowatcher --web   # TUI + web side-by-side
+```
 
-```ini
+## Configuration
+
+Settings are stored in `config.toml`. Key sections:
+
+```toml
 [Watcher]
-feed_url = https://your-feed/rss.xml
+feed_url = "https://your-rss-feed-url"
 check_interval = 31
 min_reward = 0.0
-enable_notifications = true
-enable_sound = true
-use_custom_user_agent = false
 
 [WebSocket]
 enable_websocket = true
 user_id = 12345
-user_session = your_long_session_token_here
-
-[Paths]
-sound_file = C:\Windows\Media\chimes.wav
-log_file = logs/gengowatcher.log
-notification_icon_path =
-browser_path =
-browser_args = --new-window {url}
-all_entries_log = logs/all_entries.csv
-
-[Logging]
-log_max_bytes = 1000000
-log_backup_count = 3
-log_main_enabled = true
-log_all_entries_enabled = true
-
-[Network]
-max_backoff = 300
-user_agent_email = your_email@example.com
-
-[AutoAccept]
-enabled = false
-min_reward = 0.0
-max_reward = 999999.0
-job_sources = rss,websocket
-accept_delay_min = 5
-accept_delay_max = 30
-browser_profile_path =
-notification_on_accept = true
-log_acceptance = true
-
-[Captcha]
-service = 2captcha
-max_retries = 3
-retry_delay = 5
-rate_limit = 60
-
-[WebServer]
-enabled = false
-port = 8000
-host = localhost
-enable_auth = false
-api_key =
+user_session = "YOUR_SESSION_TOKEN"
+user_key = "YOUR_USER_KEY"
 ```
 
----
+Get WebSocket credentials from your browser's DevTools:
 
-## 🤖 Auto Job Acceptance
+- **user_id** and **user_session**: Application → Cookies → gengo.com
+- **user_key**: Application → Local Storage → gengo.com → userKey
 
-GengoWatcher can automatically accept jobs that meet your configured criteria:
+### Browser Worker
 
-### Configuration Options
+The browser worker is an optional local Playwright sidecar that keeps a long-lived headed browser with a dedicated persistent profile. It launches with anti-automation flags (`--disable-blink-features=AutomationControlled`) and an init script that strips `navigator.webdriver`, so the browser session presents a clean fingerprint to Gengo's web tier.
 
-- `enabled`: Enable/disable auto job acceptance (true/false)
-- `min_reward`: Minimum reward amount for auto acceptance
-- `max_reward`: Maximum reward amount for auto acceptance
-- `job_sources`: Comma-separated list of sources (rss, websocket)
-- `accept_delay_min`: Minimum delay in seconds before accepting a job
-- `accept_delay_max`: Maximum delay in seconds before accepting a job
-- `browser_profile_path`: Path to browser profile for job acceptance (if needed)
-- `notification_on_accept`: Show notification when a job is accepted
-- `log_acceptance`: Log accepted jobs to a file
+Configure the `BrowserWorker` section in `config.toml`, then start it separately with:
 
-### Rate Limiting & Error Handling
-
-The auto-acceptance engine includes built-in rate limiting (30 requests/minute) to prevent exceeding API limits and implements retry mechanisms for failed acceptance attempts.
-
-### Management Commands
-
-- `toggleautoaccept` - Enable/disable auto-acceptance
-- `acceptstats` - Display job acceptance statistics
-
----
-
-## 🔐 CAPTCHA Solver Setup
-
-GengoWatcher supports integration with CAPTCHA solving services to automate job acceptance:
-
-### Supported Services
-
-1. **2Captcha** - https://2captcha.com (Pay-per-solve)
-2. **Anti-Captcha** - https://anti-captcha.com (Pay-per-solve)
-3. **Local Solver** - ML-based solver (No API key required)
-
-### Quick Setup
-
-To configure CAPTCHA solving:
-1. Run `python -m gengowatcher.main`
-2. Type `captchasetup` in the command interface
-3. Select your service and enter your API key (if required)
-4. The API key is stored securely using Fernet encryption (AES-128-CBC with HMAC)
-
-### Configuration Options
-
-```ini
-[Captcha]
-service = 2captcha           # Service: 2captcha, anti-captcha, or local
-max_retries = 3             # Maximum retry attempts
-retry_delay = 5              # Seconds between retries
-rate_limit = 60              # Requests per minute
+```bash
+PYTHONPATH=src python -m gengowatcher.browser_worker.main \
+  --profile-path profiles/browser-worker \
+  --socket-path /tmp/gengowatcher-browser-worker.sock
 ```
 
-### Management Commands
+The operator procedure for black-box validation is documented in `docs/browser-worker-black-box-test-procedure.md`.
 
-- `captchatest` - Verify API key and check balance
-- `captchastats` - View usage statistics and costs
-- `captchareset` - Clear configuration and start over
+### Native Browser Listener
 
-### Security Features
+The native listener attaches to your real Firefox session via DevTools Protocol and observes workbench pages without injecting scripts or running a separate browser. Configure under `[NativeBrowserListener]`:
 
-- API keys encrypted at rest using system-specific key derivation
-- Restrictive file permissions (0o600)
-- No sensitive data logged (tokens, keys, or solutions)
-- HTTPS-only API communication
+```toml
+[NativeBrowserListener]
+enabled = true
+capture_interval_ms = 750
 
-⚠️ **Note**: Using CAPTCHA solving services incurs costs. Monitor usage with `captchastats`.
+[Browser]
+backend = "native"
+debug_url = "ws://127.0.0.1:6000"
+```
 
----
+Observed events are projected into state by `state_projector.py` and surface in the **Jobs** tab as browser-collected rows with order ID, time-left, source text, and segment counts.
 
-## ⌨️ Commands
+### Webhooks and API Events
 
-Type commands directly into the TUI and press `Enter` to execute them.
+Inbound and outbound webhooks live under `[Webhooks]` in `config.toml`. Inbound is HMAC-SHA256 signed with a per-request timestamp (clock-skew tolerance configurable); outbound supports multiple targets with exponential backoff retry and a JSONL audit log.
 
-| Command               | Aliases      | Description                                                 |
-| --------------------- | ------------ | ----------------------------------------------------------- |
-| `acceptstats`         |              | Display job acceptance statistics.                          |
-| `autoaccept`          |              | Toggle auto job acceptance on/off.                          |
-| `captchasetup`        |              | Interactive CAPTCHA solver configuration.                   |
-| `captchatest`         |              | Test CAPTCHA solving service connection and balance.        |
-| `captchastats`        |              | View CAPTCHA usage statistics and costs.                    |
-| `captchareset`        |              | Reset CAPTCHA configuration.                                |
-| `captchatoggle`       |              | Toggle CAPTCHA solving on/off.                              |
-| `check`               |              | Trigger an immediate RSS feed check.                        |
-| `clear`               |              | Clear the command output panel.                             |
-| `exit`                | `q`, `quit`  | Save the current state and exit the application.            |
-| `help`                |              | Display the list of available commands.                     |
-| `notifytest`          | `nt`         | Send a test notification to check sound and alerts.         |
-| `pause`               | `p`          | Pause feed checks. A `gengowatcher.pause` file is created.  |
-| `reloadconfig`        | `rl`         | Reload all settings from `config.ini`.                      |
-| `restart`             |              | Restart the entire script.                                  |
-| `resume`              | `r`          | Resume feed checks by deleting the pause file.              |
-| `setminreward <amt>`  | `smr <amt>`  | Set a minimum reward value (e.g., `smr 5.50`).              |
-| `toggleautoaccept`    | `taa`        | Toggle auto job acceptance on/off.                          |
-| `togglenotifications` | `tn`         | Toggle desktop notifications on or off.                     |
-| `togglesound`         | `ts`         | Toggle sound alerts on or off.                              |
-| `togglewebsocket`     | `tw`         | Toggle WebSocket monitoring (requires restart).             |
-| `wstest [mode]`       | `wt`         | Test the watcher. `wt` checks the WebSocket connection. `wt notify` sends a test job. |
+Public API event routes:
 
----
+```text
+POST /api/jobs/discovered      # requires bearer auth
+POST /api/webhooks/jobs/discovered  # HMAC-required alias
+GET  /api/events               # recent lifecycle events
+GET  /api/events/audit         # webhook audit log
+```
 
-## 🐛 Troubleshooting
+## Commands
 
-#### Terminal Flickering or Rendering Issues
+| Command | Description |
+|---------|-------------|
+| `check` | Trigger immediate RSS check |
+| `pause` and `resume` | Pause/resume monitoring |
+| `wstest` | Test WebSocket connection |
+| `notifytest` | Test notifications |
+| `togglesound` | Toggle sound alerts |
+| `autoaccept` | Toggle auto-acceptance |
+| `help` | Show all commands |
+| `exit` | Save state and quit |
 
-This application uses a Text-Based User Interface (TUI) which draws and redraws itself rapidly. Older terminals (like the default `cmd.exe` or `powershell.exe` on Windows) may struggle to keep up, causing flickering or graphical glitches.
+## Web API
 
-**Solution**: Use a modern, hardware-accelerated terminal for the best experience.
--   **Windows**: [**Windows Terminal**](https://aka.ms/terminal) (recommended, available on the Microsoft Store)
--   **macOS**: [**iTerm2**](https://iterm2.com/)
--   **Linux/Cross-Platform**: [**Alacritty**](https://alacritty.org/), [**Kitty**](https://sw.kovidgoyal.net/kitty/)
+The built-in web API exposes status, jobs, events, file transfer, and webhook ingest. Endpoints live under `/api/...` and require a bearer token (auto-generated on first run; see `[WebServer].auth_token`).
 
-#### WebSocket Connection Issues
+```text
+GET  /api/status
+GET  /api/jobs
+GET  /api/events
+POST /api/jobs/{id}/accept
+POST /api/jobs/cancel
+POST /api/commands
+GET  /api/config
+PUT  /api/config/{section}/{option}
+GET  /api/files
+POST /api/files/upload
+GET  /api/files/{stored_name}
+WS   /ws/status            # real-time status stream
+```
 
-If you're experiencing WebSocket connection problems:
-1. Verify your user_id and user_session are correct
-2. Check network connectivity
-3. Use `wstest` to diagnose connection issues
-4. Ensure your WebSocket headers match the expected format
+### File Transfer
 
-#### CAPTCHA Solving Issues
+The file store is rooted at `[Paths].file_storage_dir` and exposed as:
 
-If CAPTCHA solving isn't working:
-1. Verify your API key with `captchatest`
-2. Check your service balance
-3. Ensure you haven't exceeded rate limits
-4. Try resetting with `captchareset`
+```text
+GET  /api/files
+POST /api/files/upload
+GET  /api/files/{stored_name}
+```
 
----
+When `POST /api/files/upload` includes `job_id`, `tier`, `word_count`, and `value`,
+stored files are renamed to:
 
-## 📜 License
+```text
+YYYYMMDD_HHMMSS_<job_id>_<pro|standard>_<word_count>w_<value>.<ext>
+```
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+Example:
+
+```text
+20260410_163012_job-12345_pro_320w_16.00.txt
+```
+
+All three endpoints require the normal web API bearer token.
+
+## Development
+
+```bash
+# Run tests
+python -m pytest
+
+# Run a single test file
+python -m pytest tests/test_state.py -q
+
+# Type-check / syntax check
+python -m py_compile src/gengowatcher/*.py tests/*.py scripts/*.py
+
+# Format with Black (line length 88)
+python -m black .
+
+# Lint with flake8 (line length 88, E203 ignored)
+python -m flake8 .
+
+# Build a wheel + sdist
+python -m build
+```
+
+The Makefile wraps the same commands using `.venv/bin/python` when available.
+
+![GengoWatcher TUI Screenshot](assets/tui-screenshot.png)
