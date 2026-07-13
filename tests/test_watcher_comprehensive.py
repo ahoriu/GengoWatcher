@@ -1037,12 +1037,16 @@ class TestJobProcessing:
         )
         watcher_instance.config.config["AutoAccept"]["allow_http_fallback"] = True
 
-        with patch("threading.Thread") as mock_thread:
+        with patch(
+            "gengowatcher.orchestration.watcher_job_processor._submit_job_acceptance_task"
+        ) as submit_acceptance:
             watcher_instance._process_new_job(
                 999, "High Value", 100.0, "http://example.com/999", "RSS"
             )
-            # Should spawn acceptance thread
-            mock_thread.assert_called()
+            submit_acceptance.assert_called_once_with(
+                watcher_instance._async_job_acceptance_wrapper,
+                watcher_instance.state.add_job.call_args[0][0],
+            )
 
 
 class TestFeedProcessing:

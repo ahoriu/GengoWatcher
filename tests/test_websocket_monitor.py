@@ -248,3 +248,40 @@ async def test_websocket_monitor_failed_session_sync_sets_hard_failure(monkeypat
 
     assert monitor._websocket_sync_failed is True
     assert monitor._websocket_sync_failure_reason == "browser unavailable"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_uses_configured_interval(monkeypatch):
+    websocket = _SlowClosingWebSocket([])
+    monitor = GengoWebSocketMonitor(
+        _FakeConfig(
+            {
+                ("WebSocket", "wss_url"): "ws://example.test/socket",
+                ("WebSocket", "user_id"): "user-1",
+                ("WebSocket", "user_session"): "session-token",
+                ("WebSocket", "user_key"): "real-user-key",
+                ("WebSocket", "heartbeat_sec"): 7,
+                ("WebSocket", "heartbeat_jitter_sec"): 0,
+            }
+        ),
+        MagicMock(),
+        logging.getLogger("test.websocket_monitor.heartbeat"),
+    )
+    monitor._connect = lambda *_args, **_kwargs: websocket
+    monitor._sync_session_from_browser = lambda: False
+    sleep_intervals = []
+    real_sleep = asyncio.sleep
+
+    async def capture_sleep(interval):
+        sleep_intervals.append(interval)
+        websocket.close_event.set()
+        await real_sleep(0)
+
+    monkeypatch.setattr("gengowatcher.websocket_monitor.asyncio.sleep", capture_sleep)
+    monkeypatch.setattr(
+        "gengowatcher.websocket_monitor.random.uniform", lambda *_args: 0.0
+    )
+
+    await monitor._websocket_session()
+
+    assert sleep_intervals[0] == 7.0

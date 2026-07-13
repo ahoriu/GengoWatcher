@@ -1,4 +1,5 @@
 import io
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,7 +10,9 @@ from gengowatcher.orchestration.watcher_config_io import (
 )
 from gengowatcher.orchestration.watcher_debug import redact_raw_ws_value
 from gengowatcher.orchestration.watcher_feed import log_all_entries
+from gengowatcher.orchestration.watcher_io import handle_exit
 from gengowatcher.orchestration.watcher_monitor_status import sync_monitor_metrics
+from gengowatcher.orchestration.watcher_monitors import run_native_browser_listener
 
 
 def test_log_all_entries_ignores_a_closed_file():
@@ -94,3 +97,34 @@ def test_recursive_raw_ws_redaction_masks_secrets_under_benign_keys():
         "notes": "token=[REDACTED]",
         "items": ["my_gengo_session=[REDACTED]"],
     }
+
+
+def test_handle_exit_guard_is_atomic_across_threads():
+    watcher = MagicMock()
+    watcher._shutdown_lock = threading.Lock()
+    watcher._shutdown_initiated = False
+    watcher.job_acceptance_engine = None
+    watcher.cancellation_manager = None
+    watcher._all_entries_log_file = None
+    watcher._rss_executor = None
+
+    threads = [threading.Thread(target=handle_exit, args=(watcher,)) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    watcher.state.save_state.assert_called_once()
+    watcher._emit_api_event.assert_called_once_with("shutdown", {"status": "shutdown"})
+
+
+def test_native_listener_shutdown_failure_is_logged():
+    watcher = MagicMock()
+    watcher.shutdown_event.is_set.return_value = True
+    watcher._native_listener.close.side_effect = RuntimeError("close failed")
+
+    run_native_browser_listener(watcher)
+
+    watcher.logger.exception.assert_called_once_with(
+        "Native browser listener shutdown failed"
+    )

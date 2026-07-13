@@ -453,9 +453,7 @@ async def _firefox_evaluate_json(
 
 
 async def _open_firefox_rdp_client(debug_url: str | None) -> _FirefoxRdpClient:
-    websocket = await connect(
-        _normalize_debug_url(debug_url), max_size=5_000_000
-    )
+    websocket = await connect(_normalize_debug_url(debug_url), max_size=5_000_000)
     try:
         raw_message = await asyncio.wait_for(websocket.recv(), timeout=5)
         hello_packet = json.loads(raw_message)
@@ -2270,9 +2268,7 @@ def build_browser_aligned_websocket_headers(
         headers["Cookie"] = cookie_header
     elif session_token:
         rd_value = rd_session_id or session_token
-        headers["Cookie"] = (
-            f"myG_myGSession_={session_token}; myG_rdsessID={rd_value}"
-        )
+        headers["Cookie"] = f"myG_myGSession_={session_token}; myG_rdsessID={rd_value}"
 
     # Merge UA-derived Client Hints so a Chrome UA presents Chrome hints and
     # Firefox presents nothing (Firefox does not send Sec-CH-UA today).
@@ -2294,6 +2290,69 @@ def format_cookies_as_header(cookies: list[dict[str, str]]) -> str:
         if name and value is not None:
             parts.append(f"{name}={value}")
     return "; ".join(parts)
+
+
+def build_configured_websocket_headers(
+    config,
+    *,
+    browser_cookies: list[dict[str, str]] | None = None,
+    default_user_agent: str = "",
+    default_accept_language: str = "",
+    fetch_live_browser: bool = False,
+    rotate_default_user_agent: bool = False,
+    event_logger: logging.Logger | None = None,
+) -> dict[str, str]:
+    """Build browser-aligned WebSocket headers from live or configured state."""
+    session_token = ""
+    rd_session_id = ""
+    cookie_header = format_cookies_as_header(browser_cookies or [])
+    user_agent = ""
+    accept_language = ""
+
+    debug_url = config.get("WebSocket", "browser_debug_url")
+    if fetch_live_browser and debug_url:
+        try:
+            snapshot = fetch_browser_session_snapshot_sync(str(debug_url))
+            if snapshot.session_token:
+                session_token = str(snapshot.session_token)
+                rd_session_id = str(snapshot.rd_session_id or "")
+                cookie_header = format_cookies_as_header(snapshot.cookies)
+                user_agent = str(snapshot.user_agent or "")
+                accept_language = str(snapshot.accept_language or "")
+                if event_logger is not None:
+                    event_logger.info("Fetched live session from browser")
+        except Exception as error:
+            if event_logger is not None:
+                event_logger.warning("Browser extract failed: %s", error)
+
+    if not session_token:
+        session_token = str(config.get("WebSocket", "user_session") or "")
+        if session_token and event_logger is not None:
+            event_logger.info("Using configured session token")
+    if not rd_session_id:
+        rd_session_id = str(config.get("WebSocket", "rd_session_id") or "")
+
+    configured_user_agent = str(config.get("Network", "browser_user_agent") or "")
+    if not user_agent:
+        if rotate_default_user_agent and (
+            not configured_user_agent or configured_user_agent == default_user_agent
+        ):
+            user_agent = pick_rotating_user_agent(default_user_agent)
+        else:
+            user_agent = configured_user_agent or default_user_agent
+    accept_language = accept_language or str(
+        config.get("Network", "browser_accept_language") or default_accept_language
+    )
+
+    return build_browser_aligned_websocket_headers(
+        session_token=session_token,
+        rd_session_id=rd_session_id,
+        user_agent=user_agent,
+        origin=DEFAULT_GENGO_ORIGIN,
+        accept_language=accept_language,
+        sec_gpc="1",
+        cookie_header=cookie_header,
+    )
 
 
 def build_websocket_auth_payload(

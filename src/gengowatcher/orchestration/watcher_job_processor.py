@@ -10,6 +10,7 @@ work unchanged.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import queue
 import threading
 import time
@@ -27,6 +28,30 @@ try:
     from ..translation_app_client import TranslationAppClient
 except ImportError:  # pragma: no cover - translation-app optional
     TranslationAppClient = None
+
+
+AUTO_ACCEPTANCE_MAX_WORKERS = 1
+AUTO_ACCEPTANCE_MAX_PENDING = 16
+_auto_acceptance_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=AUTO_ACCEPTANCE_MAX_WORKERS,
+    thread_name_prefix="JobAcceptance",
+)
+_auto_acceptance_slots = threading.BoundedSemaphore(
+    AUTO_ACCEPTANCE_MAX_WORKERS + AUTO_ACCEPTANCE_MAX_PENDING
+)
+
+
+def _submit_job_acceptance_task(task, *args) -> concurrent.futures.Future:
+    if not _auto_acceptance_slots.acquire(blocking=False):
+        raise queue.Full("job acceptance queue is full")
+    try:
+        future = _auto_acceptance_executor.submit(task, *args)
+    except Exception:
+        _auto_acceptance_slots.release()
+        raise
+    future.add_done_callback(lambda _future: _auto_acceptance_slots.release())
+    return future
+
 
 def process_new_job(watcher, job_id, title, reward, url, source, source_meta=None):
     """Process a newly discovered job from RSS or WebSocket sources.
@@ -112,9 +137,7 @@ def process_new_job(watcher, job_id, title, reward, url, source, source_meta=Non
     watcher._emit_api_event("job.details", job_data)
 
     if watcher.browser_worker_enabled and eligible_for_auto_accept:
-        watcher.logger.info(
-            "Routing job %s to browser worker via local client", job_id
-        )
+        watcher.logger.info("Routing job %s to browser worker via local client", job_id)
         if not watcher.browser_worker_client:
             if allow_http_fallback:
                 watcher.logger.error(
@@ -249,9 +272,29 @@ def process_new_job(watcher, job_id, title, reward, url, source, source_meta=Non
             },
         )
         watcher._emit_api_event("job.accept_requested", accept_requested_payload)
-        threading.Thread(
-            target=watcher._async_job_acceptance_wrapper, args=(job_data,), daemon=True
-        ).start()
+        try:
+            _submit_job_acceptance_task(
+                watcher._async_job_acceptance_wrapper,
+                job_data,
+            )
+        except queue.Full:
+            watcher.logger.warning(
+                "Job acceptance queue is full; rejecting job %s",
+                job_id,
+            )
+            failure = {
+                "acceptance_state": "failed",
+                "lifecycle_state": "accept_failed",
+                "accept_failure_reason": "acceptance queue full",
+            }
+            watcher.state.update_job(str(job_id), failure)
+            failed_payload = {
+                **job_data,
+                **failure,
+                "reason": "acceptance queue full",
+            }
+            watcher._emit_webhook_event("job.accept_failed", failed_payload)
+            watcher._emit_api_event("job.accept_failed", failed_payload)
     else:
         watcher.logger.debug(f"Job {job_id} does not meet auto-accept criteria")
 
@@ -263,6 +306,8 @@ def process_new_job(watcher, job_id, title, reward, url, source, source_meta=Non
             watcher.on_job_added_callback(job_data)
         except Exception as e:
             watcher.logger.debug(f"Error in job added callback: {e}")
+
+
 def async_job_acceptance_wrapper(watcher, job_data: dict):
     """
     Wrapper to run async job acceptance in a separate thread.
@@ -326,6 +371,7 @@ def async_job_acceptance_wrapper(watcher, job_data: dict):
     finally:
         loop.close()
 
+
 def async_cancel_current_job_wrapper(watcher, upcoming_job: dict):
     """Wrapper to cancel the current job without blocking the main thread."""
     previous_job_id = watcher.cancellation_manager.current_job_id
@@ -341,6 +387,7 @@ def async_cancel_current_job_wrapper(watcher, upcoming_job: dict):
             )
     except Exception as e:
         watcher.logger.error(f"Error during automatic job cancellation: {e}")
+
 
 def submit_job_to_translation_app_async(watcher, job_data: dict) -> None:
     """Submit a discovered job to translation-app without blocking monitors."""
@@ -400,8 +447,8 @@ def submit_job_to_translation_app_async(watcher, job_data: dict) -> None:
 
 
 __all__ = [
-    "process_new_job",
-    "async_job_acceptance_wrapper",
     "async_cancel_current_job_wrapper",
+    "async_job_acceptance_wrapper",
+    "process_new_job",
     "submit_job_to_translation_app_async",
 ]

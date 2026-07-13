@@ -41,48 +41,52 @@ except ImportError:  # pragma: no cover - website monitor optional
     WebsiteMonitor = None
 
 
-def run_email_monitor(watcher):
-    """Run email monitor in a dedicated thread with its own event loop."""
-    if EmailMonitor is None:
-        watcher.logger.error("Email monitor dependencies not installed")
-        return
-
+def _run_async_monitor(watcher, monitor_class, attribute_name, error_context):
+    """Run an optional async monitor in a dedicated thread and event loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    checker_stop = threading.Event()
+    shutdown_thread = None
 
     async def job_callback(job_id, title, reward, url, source):
         await asyncio.to_thread(
             watcher._process_new_job, job_id, title, reward, url, source
         )
 
-    watcher.email_monitor = EmailMonitor(
-        config=watcher.config,
-        logger=watcher.logger,
-        job_callback=job_callback,
-        shutdown_event=asyncio.Event(),
-    )
-
-    checker_stop = threading.Event()
-
-    def check_shutdown():
-        while not checker_stop.wait(1):
-            if not watcher.shutdown_event.is_set():
-                continue
-            break
-        if watcher.email_monitor:
-            loop.call_soon_threadsafe(watcher.email_monitor.shutdown_event.set)
-
-    shutdown_thread = threading.Thread(target=check_shutdown, daemon=True)
-    shutdown_thread.start()
-
     try:
-        loop.run_until_complete(watcher.email_monitor.start())
-    except Exception as e:
-        watcher.logger.error(f"Email monitor error: {e}")
+        monitor = monitor_class(
+            config=watcher.config,
+            logger=watcher.logger,
+            job_callback=job_callback,
+            shutdown_event=asyncio.Event(),
+        )
+        setattr(watcher, attribute_name, monitor)
+
+        def check_shutdown():
+            while not checker_stop.wait(1):
+                if watcher.shutdown_event.is_set():
+                    loop.call_soon_threadsafe(monitor.shutdown_event.set)
+                    return
+
+        shutdown_thread = threading.Thread(target=check_shutdown, daemon=True)
+        shutdown_thread.start()
+        loop.run_until_complete(monitor.start())
+    except Exception:
+        watcher.logger.exception("%s monitor failed", error_context)
     finally:
         checker_stop.set()
-        shutdown_thread.join()
+        if shutdown_thread is not None:
+            shutdown_thread.join()
+        asyncio.set_event_loop(None)
         loop.close()
+
+
+def run_email_monitor(watcher):
+    """Run email monitor in a dedicated thread with its own event loop."""
+    if EmailMonitor is None:
+        watcher.logger.error("Email monitor dependencies not installed")
+        return
+    _run_async_monitor(watcher, EmailMonitor, "email_monitor", "Email")
 
 
 def run_website_monitor(watcher):
@@ -90,43 +94,7 @@ def run_website_monitor(watcher):
     if WebsiteMonitor is None:
         watcher.logger.error("Website monitor dependencies not installed (playwright)")
         return
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    async def job_callback(job_id, title, reward, url, source):
-        await asyncio.to_thread(
-            watcher._process_new_job, job_id, title, reward, url, source
-        )
-
-    watcher.website_monitor = WebsiteMonitor(
-        config=watcher.config,
-        logger=watcher.logger,
-        job_callback=job_callback,
-        shutdown_event=asyncio.Event(),
-    )
-
-    checker_stop = threading.Event()
-
-    def check_shutdown():
-        while not checker_stop.wait(1):
-            if not watcher.shutdown_event.is_set():
-                continue
-            break
-        if watcher.website_monitor:
-            loop.call_soon_threadsafe(watcher.website_monitor.shutdown_event.set)
-
-    shutdown_thread = threading.Thread(target=check_shutdown, daemon=True)
-    shutdown_thread.start()
-
-    try:
-        loop.run_until_complete(watcher.website_monitor.start())
-    except Exception as e:
-        watcher.logger.error(f"Website monitor error: {e}")
-    finally:
-        checker_stop.set()
-        shutdown_thread.join()
-        loop.close()
+    _run_async_monitor(watcher, WebsiteMonitor, "website_monitor", "Website")
 
 
 def run_native_browser_listener(watcher):
@@ -134,40 +102,53 @@ def run_native_browser_listener(watcher):
     from queue import Empty
 
     watcher.logger.info("Native browser listener starting...")
-    while not watcher.shutdown_event.is_set():
-        try:
-            # Poll native listener (publishes events)
-            if hasattr(watcher, "_native_listener"):
-                watcher._native_listener.run_once()
+    try:
+        while not watcher.shutdown_event.is_set():
+            try:
+                # Poll native listener (publishes events)
+                if hasattr(watcher, "_native_listener"):
+                    watcher._native_listener.run_once()
 
-            # Drain events into state projector
-            if hasattr(watcher, "_state_projector"):
-                try:
-                    from ..event_bus import get_native_events_queue
-                    from ..events import EventEnvelope
+                # Drain events into state projector
+                if hasattr(watcher, "_state_projector"):
+                    try:
+                        from ..event_bus import get_native_events_queue
+                        from ..events import EventEnvelope
 
-                    q = get_native_events_queue()
-                    while True:
-                        try:
-                            event_dict = q.get_nowait()
-                            event = EventEnvelope.from_dict(event_dict)
-                            watcher._state_projector.project(event)
-                        except Empty:
-                            break
-                        except Exception as e:
-                            watcher.logger.debug(f"Event projection error: {e}")
-                except Exception as e:
-                    watcher.logger.debug(f"Event bus drain error: {e}")
+                        q = get_native_events_queue()
+                        while True:
+                            try:
+                                event_dict = q.get_nowait()
+                                event = EventEnvelope.from_dict(event_dict)
+                                watcher._state_projector.project(event)
+                            except Empty:
+                                break
+                            except Exception as e:
+                                watcher.logger.debug(f"Event projection error: {e}")
+                    except Exception as e:
+                        watcher.logger.debug(f"Event bus drain error: {e}")
 
-        except Exception as e:
-            watcher.logger.debug(f"Native browser listener error: {e}")
-        capture_interval = (
-            getattr(watcher, "_native_listener", None).capture_interval
-            if hasattr(watcher, "_native_listener")
-            and hasattr(getattr(watcher, "_native_listener", None), "capture_interval")
-            else 0.75
-        )
-        time.sleep(capture_interval)
+            except Exception as e:
+                watcher.logger.debug(f"Native browser listener error: {e}")
+            capture_interval = (
+                getattr(watcher, "_native_listener", None).capture_interval
+                if hasattr(watcher, "_native_listener")
+                and hasattr(
+                    getattr(watcher, "_native_listener", None), "capture_interval"
+                )
+                else 0.75
+            )
+            time.sleep(capture_interval)
+    finally:
+        listener = getattr(watcher, "_native_listener", None)
+        close = getattr(listener, "close", None)
+        if not callable(close):
+            close = getattr(listener, "stop", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                watcher.logger.exception("Native browser listener shutdown failed")
 
 
 __all__ = [

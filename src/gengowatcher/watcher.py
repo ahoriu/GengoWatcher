@@ -265,6 +265,7 @@ class GengoWatcher:
         self._seen_jobs_lock = threading.Lock()
         self._all_entries_log_file = None
         self._csv_writer = None
+        self._shutdown_lock = threading.Lock()
         self._shutdown_initiated = False
         self._rss_executor = None
         self._rss_future = None

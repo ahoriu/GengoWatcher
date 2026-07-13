@@ -121,10 +121,11 @@ def fetch_rss(watcher):
 
 def handle_exit(watcher):
     """Handle application exit"""
-    if getattr(watcher, "_shutdown_initiated", False):
-        return
+    with watcher._shutdown_lock:
+        if getattr(watcher, "_shutdown_initiated", False):
+            return
+        watcher._shutdown_initiated = True
 
-    watcher._shutdown_initiated = True
     watcher.logger.info("GengoWatcher shutting down...")
     watcher.shutdown_event.set()
     watcher.check_now_event.set()

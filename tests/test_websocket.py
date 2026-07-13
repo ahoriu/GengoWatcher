@@ -1,6 +1,5 @@
 import collections
 import json
-from builtins import TimeoutError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

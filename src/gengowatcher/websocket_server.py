@@ -22,9 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .browser_session import (
-    build_browser_aligned_websocket_headers,
-    fetch_browser_session_snapshot_sync,
-    format_cookies_as_header,
+    build_configured_websocket_headers,
 )
 from .browser_session_core import GENGO_REALTIME_URL
 from .config import AppConfig, PLACEHOLDER_CONFIG_VALUES
@@ -66,52 +64,12 @@ class GengoRealtimeGateway:
         return cache_dir / "gateway_events.jsonl"
 
     def _build_headers(self) -> dict:
-        debug_url = self.config.get("WebSocket", "browser_debug_url")
-        session_token = ""
-        rd_session_id = ""
-        cookie_header = ""
-        user_agent = ""
-        accept_language = ""
-
-        if debug_url:
-            try:
-                snapshot = fetch_browser_session_snapshot_sync(str(debug_url))
-                if snapshot.session_token:
-                    session_token = snapshot.session_token
-                    rd_session_id = snapshot.rd_session_id
-                    cookie_header = format_cookies_as_header(snapshot.cookies)
-                    user_agent = snapshot.user_agent
-                    accept_language = snapshot.accept_language
-                    logger.info("Fetched live session from browser")
-            except Exception as e:
-                logger.warning(f"Browser extract failed: {e}")
-
-        if not session_token:
-            session_token = str(self.config.get("WebSocket", "user_session") or "")
-            if session_token:
-                logger.info("Using configured session token")
-        if not rd_session_id:
-            rd_session_id = str(
-                self.config.get("WebSocket", "rd_session_id") or ""
-            )
-
-        user_agent = user_agent or (
-            self.config.get("Network", "browser_user_agent")
-            or _WEBSOCKET_DEFAULTS.user_agent
-        )
-        accept_language = accept_language or (
-            self.config.get("Network", "browser_accept_language")
-            or _WEBSOCKET_DEFAULTS.accept_language
-        )
-
-        return build_browser_aligned_websocket_headers(
-            session_token=session_token,
-            rd_session_id=rd_session_id,
-            user_agent=user_agent,
-            origin="https://gengo.com",
-            accept_language=accept_language,
-            sec_gpc="1",
-            cookie_header=cookie_header,
+        return build_configured_websocket_headers(
+            self.config,
+            default_user_agent=_WEBSOCKET_DEFAULTS.user_agent,
+            default_accept_language=_WEBSOCKET_DEFAULTS.accept_language,
+            fetch_live_browser=True,
+            event_logger=logger,
         )
 
     _MAX_EVENT_LOG_LINES = 5000

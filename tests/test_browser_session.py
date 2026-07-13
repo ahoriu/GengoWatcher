@@ -12,6 +12,7 @@ from gengowatcher.browser_session import (
     _cdp_call,
     _normalize_debug_url,
     build_browser_aligned_websocket_headers,
+    build_configured_websocket_headers,
     build_websocket_auth_payload,
     describe_browser_activity_action,
     extract_cookie_value,
@@ -1228,6 +1229,40 @@ def test_build_browser_aligned_websocket_headers_uses_browser_profile():
         "Sec-GPC": "1",
         "Cookie": "myG_myGSession_=fresh-token; myG_rdsessID=fresh-token",
     }
+
+
+def test_build_configured_websocket_headers_prefers_live_browser_snapshot(
+    monkeypatch,
+):
+    config = MagicMock()
+    values = {
+        ("WebSocket", "browser_debug_url"): "ws://browser.test",
+        ("WebSocket", "user_session"): "configured-token",
+        ("WebSocket", "rd_session_id"): "configured-rd",
+        ("Network", "browser_user_agent"): "Configured Browser",
+        ("Network", "browser_accept_language"): "en-US",
+    }
+    config.get.side_effect = lambda section, option: values.get((section, option))
+    snapshot = MagicMock(
+        session_token="live-token",
+        rd_session_id="live-rd",
+        cookies=[{"name": "live-cookie", "value": "value"}],
+        user_agent="Live Browser",
+        accept_language="en-GB",
+    )
+    monkeypatch.setattr(
+        "gengowatcher.browser_session.fetch_browser_session_snapshot_sync",
+        lambda _url: snapshot,
+    )
+
+    headers = build_configured_websocket_headers(
+        config,
+        fetch_live_browser=True,
+    )
+
+    assert headers["Cookie"] == "live-cookie=value"
+    assert headers["User-Agent"] == "Live Browser"
+    assert headers["Accept-Language"] == "en-GB"
 
 
 def test_build_browser_aligned_websocket_headers_omits_handshake_headers():

@@ -15,10 +15,8 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from .browser_session import (
-    build_browser_aligned_websocket_headers,
+    build_configured_websocket_headers,
     fetch_browser_session_snapshot_sync,
-    format_cookies_as_header,
-    pick_rotating_user_agent,
 )
 from .config import AppConfig
 from .state import AppState
@@ -147,13 +145,17 @@ class GengoWebSocketMonitor:
             if snapshot.user_agent:
                 current_ua = self.config.get("Network", "browser_user_agent", "")
                 if snapshot.user_agent != current_ua:
-                    self.config.set("Network", "browser_user_agent", snapshot.user_agent)
+                    self.config.set(
+                        "Network", "browser_user_agent", snapshot.user_agent
+                    )
                     self.logger.debug("WebSocket: Synced browser User-Agent")
                     changed = True
             if snapshot.accept_language:
                 current_al = self.config.get("Network", "browser_accept_language", "")
                 if snapshot.accept_language != current_al:
-                    self.config.set("Network", "browser_accept_language", snapshot.accept_language)
+                    self.config.set(
+                        "Network", "browser_accept_language", snapshot.accept_language
+                    )
                     self.logger.debug("WebSocket: Synced browser Accept-Language")
                     changed = True
             # Store full cookie jar for fingerprint matching.
@@ -187,29 +189,12 @@ class GengoWebSocketMonitor:
             return fallback
 
     def _build_headers(self) -> dict[str, str]:
-        session_token = self.config.get("WebSocket", "user_session", "")
-        rd_session_id = self.config.get("WebSocket", "rd_session_id", "")
-        configured_ua = self.config.get("Network", "browser_user_agent", "")
-        # If the configured UA is the legacy synthetic default, substitute a
-        # rotating entry from the pool so the WS identity does not look like a
-        # static Python fingerprint.
-        if not configured_ua or configured_ua == self.defaults.user_agent:
-            user_agent = pick_rotating_user_agent(self.defaults.user_agent)
-        else:
-            user_agent = configured_ua
-        accept_language = (
-            self.config.get("Network", "browser_accept_language", "")
-            or self.defaults.accept_language
-        )
-        cookie_header = format_cookies_as_header(self._browser_cookies) if self._browser_cookies else ""
-        return build_browser_aligned_websocket_headers(
-            session_token=session_token,
-            rd_session_id=rd_session_id,
-            user_agent=user_agent,
-            origin="https://gengo.com",
-            accept_language=accept_language,
-            sec_gpc="1",
-            cookie_header=cookie_header,
+        return build_configured_websocket_headers(
+            self.config,
+            browser_cookies=self._browser_cookies,
+            default_user_agent=self.defaults.user_agent,
+            default_accept_language=self.defaults.accept_language,
+            rotate_default_user_agent=True,
         )
 
     def _capture_raw_ws_message(self, message: str, *, direction: str = "recv") -> None:
@@ -382,7 +367,12 @@ class GengoWebSocketMonitor:
                                 )
                             )
                             jitter = random.uniform(-jitter_magnitude, jitter_magnitude)
-                            interval = max(1.0, self.HEARTBEAT_INTERVAL + jitter)
+                            heartbeat_interval = self._config_int(
+                                "WebSocket",
+                                "heartbeat_sec",
+                                self.defaults.heartbeat_sec,
+                            )
+                            interval = max(1.0, heartbeat_interval + jitter)
                             await asyncio.sleep(interval)
                         first_iteration = False
                         t0 = time.perf_counter()

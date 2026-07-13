@@ -266,7 +266,7 @@ async def websocket_logic(watcher):
                         watcher.logger.debug(
                             f"WebSocket: First message type: {data.get('type', 'unknown')}"
                         )
-                    except Exception as e:
+                    except json.JSONDecodeError as e:
                         watcher.logger.warning(
                             f"WebSocket: Could not parse first message as JSON: {e}. Raw: {first_message[:100]}..."
                         )
@@ -341,7 +341,7 @@ async def websocket_logic(watcher):
                         data = None
                         try:
                             data = json.loads(message)
-                        except Exception as e:
+                        except json.JSONDecodeError as e:
                             watcher.logger.warning(
                                 f"WebSocket: Could not parse message as JSON: {e}"
                             )
@@ -388,7 +388,11 @@ async def websocket_logic(watcher):
                         f"WebSocket: Disconnected by server: code={getattr(e, 'code', None)}, reason={getattr(e, 'reason', None)}"
                     )
                 except Exception as e:
-                    watcher.logger.error(f"WebSocket: Error in main message loop: {e}")
+                    watcher.logger.error(
+                        "WebSocket: Error in main message loop: %s",
+                        e,
+                        exc_info=True,
+                    )
                 finally:
                     test_monitor_task.cancel()
                     heartbeat_task.cancel()
@@ -436,7 +440,6 @@ async def websocket_logic(watcher):
             ("user-agent only headers", ua_only_headers),
             ("no custom headers", None),
         ]
-        last_error = None
         for index, (profile_name, headers) in enumerate(header_profiles):
             if headers is None and index == 1 and ua_only_headers is None:
                 continue
@@ -447,10 +450,8 @@ async def websocket_logic(watcher):
                         profile_name,
                     )
                 await run_session(headers)
-                last_error = None
                 break
             except (InvalidStatus, InvalidHandshake, TimeoutError) as e:
-                last_error = e
                 if index == len(header_profiles) - 1:
                     raise
                 watcher.logger.warning(
@@ -458,8 +459,6 @@ async def websocket_logic(watcher):
                     profile_name,
                     e,
                 )
-        if last_error is not None:
-            raise last_error
     except (
         ConnectionClosed,
         InvalidStatus,
